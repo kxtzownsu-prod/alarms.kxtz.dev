@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#3b5bfd">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Alarms">
+  <title>Alarms</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+</head>
+<body>
+  <div class="page">
+    <header class="page-header">
+      <div>
+        <h1>Alarms</h1>
+        <div class="date" id="dateLabel"></div>
+      </div>
+      <div class="header-right">
+        <div class="clock" id="clock">00:00:00</div>
+        <button class="btn btn-ghost btn-icon btn-sm" id="modeToggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+      </div>
+    </header>
+
+    <div class="banner" id="statusBanner">
+      <span class="live-dot" id="liveDot" hidden></span>
+      <span aria-hidden="true" id="bannerIcon">ⓘ</span>
+      <span id="bannerText">Alarms keep running if this tab stays open in the background. Closing the tab still stops them.</span>
+      <button class="btn btn-secondary btn-sm" id="armSoundBtn" type="button" hidden>Enable background</button>
+    </div>
+
+    <div class="toolbar">
+      <button class="btn btn-primary" id="addAlarmBtn" type="button">+ Add alarm</button>
+    </div>
+
+    <div id="alarmsContainer"></div>
+  </div>
+
+  <div class="overlay" id="addOverlay" hidden>
+    <form class="dialog" id="addForm" role="dialog" aria-modal="true" aria-labelledby="addDialogTitle">
+      <h2 id="addDialogTitle">Add alarm</h2>
+
+      <div class="field">
+        <label for="timeInput">Time</label>
+        <input class="input" type="time" id="timeInput" required>
+      </div>
+
+      <div class="field">
+        <label for="labelInput">Label</label>
+        <input class="input" type="text" id="labelInput" placeholder="Alarm" maxlength="60">
+      </div>
+
+      <div class="field">
+        <label for="soundInput">Sound URL (MP3, WAV, OGG…)</label>
+        <input class="input" type="url" id="soundInput" placeholder="https://dl.kxtz.dev/sounds/alarm.mp3">
+        <div class="or-divider">or</div>
+        <input type="file" id="soundFile" accept="audio/*">
+        <div class="hint">A local file is stored in this browser. Use a URL if you want to share the same sound across devices.</div>
+      </div>
+
+      <div class="field field-row">
+        <label for="repeatInput" class="switch-label">Repeat daily</label>
+        <label class="switch">
+          <input type="checkbox" id="repeatInput" checked>
+          <span class="track"><span class="thumb"></span></span>
+        </label>
+      </div>
+
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" id="cancelAddBtn">Cancel</button>
+        <button class="btn btn-primary" type="submit">Save alarm</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="overlay" id="ringOverlay" hidden>
+    <div class="ringing-card" role="alertdialog" aria-modal="true" aria-labelledby="ringLabel">
+      <div class="ringing-time" id="ringTime">00:00</div>
+      <div class="ringing-label" id="ringLabel">Alarm</div>
+      <div class="ringing-actions">
+        <button class="btn btn-secondary" id="snoozeBtn" type="button">Snooze 5 min</button>
+        <button class="btn btn-primary" id="stopBtn" type="button">Stop</button>
+      </div>
+      <button class="btn btn-secondary" id="allowSoundBtn" type="button" hidden>Tap to allow sound</button>
+    </div>
+  </div>
+
+  <audio id="ringtone" preload="none" playsinline></audio>
+  <audio id="keepAlive" loop playsinline preload="auto"></audio>
+
+  <script src="script.js"></script>
+</body>
+</html>
