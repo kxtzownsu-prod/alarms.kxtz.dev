@@ -1,7 +1,12 @@
 const STORAGE_KEY = 'alarms.kxtz';
 const DB_NAME = 'alarms.kxtz';
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const AUTO_CLEAR_MS = 20 * 60 * 1000;
+const MAX_RANGE_ALARMS = 500;
 const alarms = [];
 let ringingAlarm = null;
+let editingAlarm = null;
+let savedDayState = [];
 let notificationAsked = false;
 let keepAliveOn = false;
 let audioCtx = null;
@@ -10,6 +15,8 @@ let keepGain = null;
 let keepWavUrl = '';
 let wakeLock = null;
 let dueTimer = null;
+let autoClearTimer = null;
+let addMode = 'single';
 
 const clockEl = document.getElementById('clock');
 const dateLabelEl = document.getElementById('dateLabel');
@@ -22,12 +29,28 @@ const armSoundBtn = document.getElementById('armSoundBtn');
 const addOverlay = document.getElementById('addOverlay');
 const addForm = document.getElementById('addForm');
 const addAlarmBtn = document.getElementById('addAlarmBtn');
+const bulkAddBtn = document.getElementById('bulkAddBtn');
 const cancelAddBtn = document.getElementById('cancelAddBtn');
 const timeInput = document.getElementById('timeInput');
 const labelInput = document.getElementById('labelInput');
 const soundInput = document.getElementById('soundInput');
 const soundFile = document.getElementById('soundFile');
 const repeatInput = document.getElementById('repeatInput');
+const dayRepeatFields = document.getElementById('dayRepeatFields');
+const dayInputs = [...document.querySelectorAll('#dayRepeatFields [data-day]')];
+const addDialogTitle = document.getElementById('addDialogTitle');
+const deleteEditBtn = document.getElementById('deleteEditBtn');
+const soundHint = document.getElementById('soundHint');
+const saveAlarmBtn = document.getElementById('saveAlarmBtn');
+const alarmModeField = document.getElementById('alarmModeField');
+const modeSingleBtn = document.getElementById('modeSingleBtn');
+const modeRangeBtn = document.getElementById('modeRangeBtn');
+const singleTimeField = document.getElementById('singleTimeField');
+const rangeFields = document.getElementById('rangeFields');
+const startTimeInput = document.getElementById('startTimeInput');
+const endTimeInput = document.getElementById('endTimeInput');
+const intervalInput = document.getElementById('intervalInput');
+const rangeHint = document.getElementById('rangeHint');
 
 const ringOverlay = document.getElementById('ringOverlay');
 const ringTime = document.getElementById('ringTime');
@@ -55,6 +78,19 @@ function formatHm(date) {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function parseHm(value) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value || '');
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  if (h > 23 || m > 59) return null;
+  return h * 60 + m;
+}
+
+function formatMinutes(total) {
+  return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
+}
+
 function dueAt(alarm, now) {
   const parts = alarm.time.split(':');
   const h = Number(parts[0]);
@@ -62,25 +98,159 @@ function dueAt(alarm, now) {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0, 0);
 }
 
+function selectedDays(alarm) {
+  return Array.isArray(alarm.days) ? alarm.days.map(Number) : [];
+}
+
+function repeats(alarm) {
+  return !!(alarm.repeat || selectedDays(alarm).length);
+}
+
+function repeatsOn(alarm, weekday) {
+  if (alarm.repeat) return true;
+  const days = selectedDays(alarm);
+  if (!days.length) return true;
+  return days.includes(weekday);
+}
+
 function nextDue(alarm, now) {
-  const due = dueAt(alarm, now);
-  const skippedToday =
-    due.getTime() <= now.getTime() ||
-    alarm.lastTriggered === todayKey(now) ||
-    (alarm.createdAt && alarm.createdAt > due.getTime());
-  if (!skippedToday) return due;
-  const tomorrow = new Date(due);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  return tomorrow;
+  const parts = alarm.time.split(':');
+  const h = Number(parts[0]);
+  const m = Number(parts[1]);
+  for (let i = 0; i < 8; i++) {
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+    if (!repeatsOn(alarm, day.getDay())) continue;
+    const candidate = new Date(day.getFullYear(), day.getMonth(), day.getDate(), h, m, 0, 0);
+    if (candidate.getTime() <= now.getTime()) continue;
+    if (alarm.lastTriggered === todayKey(candidate)) continue;
+    if (alarm.createdAt && alarm.createdAt > candidate.getTime()) continue;
+    return candidate;
+  }
+  const fallback = dueAt(alarm, now);
+  fallback.setDate(fallback.getDate() + 7);
+  return fallback;
 }
 
 function shouldFire(alarm, now) {
   if (!alarm.enabled) return false;
+  if (!repeatsOn(alarm, now.getDay())) return false;
   const due = dueAt(alarm, now);
   if (now < due) return false;
   if (alarm.lastTriggered === todayKey(now)) return false;
   if (alarm.createdAt && alarm.createdAt > due.getTime()) return false;
   return true;
+}
+
+function readDays() {
+  return dayInputs.filter((input) => input.checked).map((input) => Number(input.dataset.day));
+}
+
+function writeDays(days) {
+  const set = new Set((days || []).map(Number));
+  dayInputs.forEach((input) => {
+    input.checked = set.has(Number(input.dataset.day));
+  });
+}
+
+function syncDayRepeatUi() {
+  const daily = repeatInput.checked;
+  dayRepeatFields.hidden = false;
+  dayRepeatFields.classList.toggle('is-disabled', daily);
+  dayInputs.forEach((input) => {
+    input.disabled = daily;
+  });
+}
+
+function onDailyChange() {
+  if (repeatInput.checked) {
+    savedDayState = readDays();
+    writeDays(savedDayState);
+  } else {
+    writeDays(savedDayState);
+  }
+  syncDayRepeatUi();
+}
+
+function rangeInfo() {
+  const start = parseHm(startTimeInput.value);
+  const end = parseHm(endTimeInput.value);
+  const interval = Number(intervalInput.value);
+  if (start === null || end === null) {
+    return { error: 'Set a start time and an end time.' };
+  }
+  if (end <= start) {
+    return { error: 'End time must be after start time.' };
+  }
+  if (!Number.isInteger(interval) || interval < 1) {
+    return { error: 'Interval must be at least 1 minute.' };
+  }
+  const count = Math.floor((end - start) / interval) + 1;
+  if (count > MAX_RANGE_ALARMS) {
+    return { error: `That would create ${count} alarms. The limit is ${MAX_RANGE_ALARMS}.` };
+  }
+  const times = [];
+  for (let minute = start; minute <= end; minute += interval) {
+    times.push(formatMinutes(minute));
+  }
+  return { times, count };
+}
+
+function updateRangeHint() {
+  if (addMode !== 'range') return;
+  if (!startTimeInput.value || !endTimeInput.value || !intervalInput.value) {
+    rangeHint.textContent = 'Set a start time, end time, and interval.';
+    rangeHint.classList.remove('is-error');
+    saveAlarmBtn.textContent = 'Add alarms';
+    return;
+  }
+  const info = rangeInfo();
+  if (info.error) {
+    rangeHint.textContent = info.error;
+    rangeHint.classList.add('is-error');
+    saveAlarmBtn.textContent = 'Add alarms';
+    return;
+  }
+  const noun = info.count === 1 ? 'alarm' : 'alarms';
+  const first = info.times[0];
+  const last = info.times[info.times.length - 1];
+  rangeHint.textContent = `Creates ${info.count} ${noun} from ${first} to ${last}.`;
+  rangeHint.classList.remove('is-error');
+  saveAlarmBtn.textContent = `Add ${info.count} ${noun}`;
+}
+
+function setAddMode(mode) {
+  addMode = mode;
+  const isRange = mode === 'range';
+  singleTimeField.hidden = isRange;
+  rangeFields.hidden = !isRange;
+  timeInput.disabled = isRange;
+  timeInput.required = !isRange;
+  startTimeInput.disabled = !isRange;
+  endTimeInput.disabled = !isRange;
+  intervalInput.disabled = !isRange;
+  startTimeInput.required = isRange;
+  endTimeInput.required = isRange;
+  intervalInput.required = isRange;
+  modeSingleBtn.classList.toggle('is-selected', !isRange);
+  modeRangeBtn.classList.toggle('is-selected', isRange);
+  modeSingleBtn.setAttribute('aria-pressed', String(!isRange));
+  modeRangeBtn.setAttribute('aria-pressed', String(isRange));
+  if (isRange && !startTimeInput.value && timeInput.value) {
+    startTimeInput.value = timeInput.value;
+  }
+  if (!isRange && !timeInput.value && startTimeInput.value) {
+    timeInput.value = startTimeInput.value;
+  }
+  if (!editingAlarm) addDialogTitle.textContent = isRange ? 'Add alarms' : 'Add alarm';
+  saveAlarmBtn.textContent = 'Save alarm';
+  updateRangeHint();
+}
+
+function repeatBadge(alarm) {
+  if (alarm.repeat) return 'Repeats daily';
+  const days = selectedDays(alarm).slice().sort((a, b) => a - b);
+  if (!days.length) return 'One time';
+  return days.map((day) => DAY_NAMES[day]).join(' ');
 }
 
 function isArmed() {
@@ -141,6 +311,7 @@ function serialize(alarm) {
     soundKind: alarm.soundKind || 'url',
     soundId: alarm.soundId || null,
     repeat: alarm.repeat,
+    days: selectedDays(alarm),
     enabled: alarm.enabled,
     lastTriggered: alarm.lastTriggered,
     createdAt: alarm.createdAt || 0,
@@ -177,6 +348,7 @@ async function loadAlarms() {
       soundKind: row.soundKind || 'url',
       soundId: row.soundId || null,
       repeat: !!row.repeat,
+      days: Array.isArray(row.days) ? row.days.map(Number) : [],
       enabled: !!row.enabled,
       lastTriggered: row.lastTriggered || null,
       createdAt: row.createdAt || 0,
@@ -359,17 +531,27 @@ function updateClock() {
 }
 
 function checkAlarms(now) {
-  if (ringingAlarm) return;
+  const due = [];
+  let latest = null;
+  let latestDue = -Infinity;
   for (const alarm of alarms) {
     if (!shouldFire(alarm, now)) continue;
-    alarm.lastTriggered = todayKey(now);
-    if (!alarm.repeat) alarm.enabled = false;
-    saveAlarms();
-    triggerAlarm(alarm);
-    renderAlarms();
-    syncBackground();
-    break;
+    due.push(alarm);
+    const dueTime = dueAt(alarm, now).getTime();
+    if (dueTime >= latestDue) {
+      latest = alarm;
+      latestDue = dueTime;
+    }
   }
+  if (!due.length) return;
+  for (const alarm of due) {
+    alarm.lastTriggered = todayKey(now);
+    if (!repeats(alarm)) alarm.enabled = false;
+  }
+  saveAlarms();
+  triggerAlarm(latest);
+  renderAlarms();
+  syncBackground();
 }
 
 async function notifyAlarm(alarm) {
@@ -408,12 +590,18 @@ async function closeAlarmNotifications(id) {
 }
 
 function triggerAlarm(alarm) {
+  if (ringingAlarm) stopRinging();
   ringingAlarm = alarm;
   ringTime.textContent = alarm.time;
   ringLabel.textContent = alarm.label;
   ringOverlay.hidden = false;
   allowSoundBtn.hidden = true;
   document.title = `Alarm · ${alarm.label}`;
+  clearTimeout(autoClearTimer);
+  autoClearTimer = setTimeout(() => {
+    autoClearTimer = null;
+    stopRinging();
+  }, AUTO_CLEAR_MS);
 
   ringtone.src = alarm.soundUrl;
   ringtone.loop = true;
@@ -444,6 +632,8 @@ function triggerAlarm(alarm) {
 }
 
 function stopRinging() {
+  clearTimeout(autoClearTimer);
+  autoClearTimer = null;
   const id = ringingAlarm && ringingAlarm.id;
   ringtone.pause();
   ringtone.currentTime = 0;
@@ -468,6 +658,7 @@ function snoozeRinging(minutes) {
     soundKind: alarm.soundKind,
     soundId: alarm.soundId,
     repeat: false,
+    days: [],
     enabled: true,
     lastTriggered: null,
     createdAt: Date.now(),
@@ -496,16 +687,19 @@ function renderAlarms() {
     const row = document.createElement('div');
     row.className = `alarm-row${alarm.enabled ? '' : ' is-disabled'}`;
     row.innerHTML = `
-      <div class="alarm-time">${alarm.time}</div>
-      <div class="alarm-info">
-        <div class="alarm-label"></div>
-        <div class="alarm-meta">
-          <span class="badge">${alarm.repeat ? 'Repeats daily' : 'One time'}</span>
-          <span class="sound-name"></span>
+      <button class="alarm-main" type="button" data-action="edit">
+        <div class="alarm-time">${alarm.time}</div>
+        <div class="alarm-info">
+          <div class="alarm-label"></div>
+          <div class="alarm-meta">
+            <span class="badge"></span>
+            <span class="sound-name"></span>
+          </div>
         </div>
-      </div>
+      </button>
       <div class="alarm-actions">
         <button class="btn btn-ghost btn-icon btn-sm" type="button" data-action="test" title="Test sound" aria-label="Test sound">▶</button>
+        <button class="btn btn-ghost btn-icon btn-sm" type="button" data-action="edit" title="Edit alarm" aria-label="Edit alarm">✎</button>
         <label class="switch">
           <input type="checkbox" data-action="toggle" aria-label="Enable alarm">
           <span class="track"><span class="thumb"></span></span>
@@ -515,10 +709,14 @@ function renderAlarms() {
 
     row.querySelector('.alarm-label').textContent = alarm.label;
     row.querySelector('.sound-name').textContent = alarm.soundName;
+    row.querySelector('.badge').textContent = repeatBadge(alarm);
     row.querySelector('[data-action="toggle"]').checked = alarm.enabled;
 
     row.querySelector('[data-action="test"]').addEventListener('click', () => {
       new Audio(alarm.soundUrl).play().catch(() => {});
+    });
+    row.querySelectorAll('[data-action="edit"]').forEach((btn) => {
+      btn.addEventListener('click', () => openAlarmDialog(alarm));
     });
     row.querySelector('[data-action="toggle"]').addEventListener('change', (e) => {
       alarm.enabled = e.target.checked;
@@ -528,13 +726,7 @@ function renderAlarms() {
       syncBackground();
     });
     row.querySelector('[data-action="delete"]').addEventListener('click', () => {
-      const index = alarms.indexOf(alarm);
-      if (index !== -1) alarms.splice(index, 1);
-      if (alarm.soundKind === 'file' && alarm.soundUrl) URL.revokeObjectURL(alarm.soundUrl);
-      saveAlarms();
-      releaseSound(alarm.soundId);
-      renderAlarms();
-      syncBackground();
+      deleteAlarm(alarm);
     });
 
     card.appendChild(row);
@@ -551,9 +743,45 @@ function askNotificationPermission() {
   Notification.requestPermission();
 }
 
+function deleteAlarm(alarm) {
+  if (ringingAlarm && ringingAlarm.id === alarm.id) stopRinging();
+  const index = alarms.indexOf(alarm);
+  if (index !== -1) alarms.splice(index, 1);
+  if (alarm.soundKind === 'file' && alarm.soundUrl) URL.revokeObjectURL(alarm.soundUrl);
+  saveAlarms();
+  releaseSound(alarm.soundId);
+  if (editingAlarm && editingAlarm.id === alarm.id) closeAddDialog();
+  renderAlarms();
+  syncBackground();
+}
+
 function openAddDialog() {
+  openAlarmDialog(null);
+}
+
+function openAlarmDialog(alarm) {
+  editingAlarm = alarm;
   addForm.reset();
-  repeatInput.checked = true;
+  addDialogTitle.textContent = alarm ? 'Edit alarm' : 'Add alarm';
+  deleteEditBtn.hidden = !alarm;
+  alarmModeField.hidden = !!alarm;
+  setAddMode('single');
+  if (alarm) {
+    timeInput.value = alarm.time;
+    labelInput.value = alarm.label;
+    soundInput.value = alarm.soundKind === 'url' ? alarm.soundUrl : '';
+    repeatInput.checked = !!alarm.repeat;
+    savedDayState = selectedDays(alarm);
+    writeDays(savedDayState);
+    soundHint.textContent = `Current sound: ${alarm.soundName}. Leave blank to keep it.`;
+  } else {
+    repeatInput.checked = true;
+    savedDayState = [];
+    writeDays(savedDayState);
+    soundHint.textContent =
+      'A local file is stored in this browser. Use a URL if you want to share the same sound across devices.';
+  }
+  syncDayRepeatUi();
   addOverlay.hidden = false;
   timeInput.focus();
   askNotificationPermission();
@@ -561,10 +789,25 @@ function openAddDialog() {
 
 function closeAddDialog() {
   addOverlay.hidden = true;
+  editingAlarm = null;
 }
 
 addAlarmBtn.addEventListener('click', openAddDialog);
+bulkAddBtn.addEventListener('click', () => {
+  openAddDialog();
+  setAddMode('range');
+  startTimeInput.focus();
+});
 cancelAddBtn.addEventListener('click', closeAddDialog);
+deleteEditBtn.addEventListener('click', () => {
+  if (editingAlarm) deleteAlarm(editingAlarm);
+});
+repeatInput.addEventListener('change', onDailyChange);
+modeSingleBtn.addEventListener('click', () => setAddMode('single'));
+modeRangeBtn.addEventListener('click', () => setAddMode('range'));
+[startTimeInput, endTimeInput, intervalInput].forEach((input) => {
+  input.addEventListener('input', updateRangeHint);
+});
 addOverlay.addEventListener('click', (e) => {
   if (e.target === addOverlay) closeAddDialog();
 });
@@ -574,39 +817,112 @@ document.addEventListener('keydown', (e) => {
 
 addForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  const existing = editingAlarm;
   const file = soundFile.files[0];
   const url = file ? '' : soundInput.value.trim();
-  if (!file && !url) {
+  if (!file && !url && !existing) {
     soundInput.focus();
     return;
   }
 
-  const id = makeId();
-  let soundUrl = url;
-  let soundKind = 'url';
-  let soundId = null;
-  if (file) {
-    soundKind = 'file';
-    soundId = id;
-    soundUrl = URL.createObjectURL(file);
-    try {
-      await idbPut(soundId, file);
-    } catch {}
+  const isRange = !existing && addMode === 'range';
+  let times = [timeInput.value];
+  if (isRange) {
+    const info = rangeInfo();
+    if (info.error || !info.times.length) {
+      updateRangeHint();
+      return;
+    }
+    times = info.times;
+  } else if (!timeInput.value) {
+    timeInput.focus();
+    return;
   }
 
-  alarms.push({
-    id,
-    time: timeInput.value,
-    label: labelInput.value.trim() || 'Alarm',
-    soundUrl,
-    soundName: file ? file.name : url,
-    soundKind,
-    soundId,
-    repeat: repeatInput.checked,
-    enabled: true,
-    lastTriggered: null,
-    createdAt: Date.now(),
-  });
+  const daily = repeatInput.checked;
+  const days = daily ? savedDayState.slice() : readDays();
+  const label = labelInput.value.trim() || 'Alarm';
+  const enabled = existing ? existing.enabled : true;
+  const createdAt = existing ? existing.createdAt : Date.now();
+
+  let soundUrl = existing ? existing.soundUrl : url;
+  let soundKind = existing ? existing.soundKind : 'url';
+  let soundId = existing ? existing.soundId : null;
+  let soundName = existing ? existing.soundName : url;
+  const oldSoundId = soundId;
+
+  if (file) {
+    soundKind = 'file';
+    soundName = file.name;
+  } else if (url) {
+    soundKind = 'url';
+    soundId = null;
+    soundUrl = url;
+    soundName = url;
+    if (existing && existing.soundKind === 'file' && existing.soundUrl) {
+      URL.revokeObjectURL(existing.soundUrl);
+    }
+  }
+
+  if (isRange) {
+    const groupSoundId = file ? makeId() : null;
+    if (file) {
+      try {
+        await idbPut(groupSoundId, file);
+      } catch {}
+    }
+    for (const time of times) {
+      alarms.push({
+        id: makeId(),
+        time,
+        label,
+        soundUrl: file ? URL.createObjectURL(file) : soundUrl,
+        soundName: file ? file.name : soundName,
+        soundKind: file ? 'file' : 'url',
+        soundId: groupSoundId,
+        repeat: daily,
+        days: days.slice(),
+        enabled: true,
+        lastTriggered: null,
+        createdAt,
+      });
+    }
+  } else {
+    const id = existing ? existing.id : makeId();
+    if (file) {
+      soundId = existing ? existing.id : id;
+      soundUrl = URL.createObjectURL(file);
+      try {
+        await idbPut(soundId, file);
+      } catch {}
+      if (existing && existing.soundKind === 'file' && existing.soundUrl && existing.soundUrl !== soundUrl) {
+        URL.revokeObjectURL(existing.soundUrl);
+      }
+    }
+    const next = {
+      id,
+      time: timeInput.value,
+      label,
+      soundUrl,
+      soundName,
+      soundKind,
+      soundId,
+      repeat: daily,
+      days,
+      enabled,
+      lastTriggered: null,
+      createdAt,
+    };
+
+    if (existing) {
+      const index = alarms.indexOf(existing);
+      if (index !== -1) alarms[index] = next;
+      else alarms.push(next);
+    } else {
+      alarms.push(next);
+    }
+    if (oldSoundId && oldSoundId !== soundId) releaseSound(oldSoundId);
+  }
 
   saveAlarms();
   closeAddDialog();

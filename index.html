@@ -35,6 +35,7 @@
     </div>
 
     <div class="toolbar">
+      <button class="btn btn-secondary" id="bulkAddBtn" type="button">Bulk add</button>
       <button class="btn btn-primary" id="addAlarmBtn" type="button">+ Add alarm</button>
     </div>
 
@@ -45,9 +46,39 @@
     <form class="dialog" id="addForm" role="dialog" aria-modal="true" aria-labelledby="addDialogTitle">
       <h2 id="addDialogTitle">Add alarm</h2>
 
-      <div class="field">
+      <div class="field" id="alarmModeField">
+        <div class="field-label">Alarm type</div>
+        <div class="mode-switch" role="group" aria-label="Alarm type">
+          <button class="mode-btn is-selected" id="modeSingleBtn" type="button" aria-pressed="true">Single time</button>
+          <button class="mode-btn" id="modeRangeBtn" type="button" aria-pressed="false">Time range</button>
+        </div>
+      </div>
+
+      <div class="field" id="singleTimeField">
         <label for="timeInput">Time</label>
         <input class="input" type="time" id="timeInput" required>
+      </div>
+
+      <div id="rangeFields" hidden>
+        <div class="range-times">
+          <div class="field">
+            <label for="startTimeInput">Start time</label>
+            <input class="input" type="time" id="startTimeInput">
+          </div>
+          <div class="field">
+            <label for="endTimeInput">End time</label>
+            <input class="input" type="time" id="endTimeInput">
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="intervalInput">Every</label>
+          <div class="interval-row">
+            <input class="input" type="number" id="intervalInput" min="1" max="1440" step="1" value="5">
+            <span class="interval-unit">minutes</span>
+          </div>
+          <div class="hint" id="rangeHint" aria-live="polite">Set a start time, end time, and interval.</div>
+        </div>
       </div>
 
       <div class="field">
@@ -60,7 +91,7 @@
         <input class="input" type="url" id="soundInput" placeholder="https://dl.kxtz.dev/sounds/alarm.mp3">
         <div class="or-divider">or</div>
         <input type="file" id="soundFile" accept="audio/*">
-        <div class="hint">A local file is stored in this browser. Use a URL if you want to share the same sound across devices.</div>
+        <div class="hint" id="soundHint">A local file is stored in this browser. Use a URL if you want to share the same sound across devices.</div>
       </div>
 
       <div class="field field-row">
@@ -71,9 +102,62 @@
         </label>
       </div>
 
+      <div id="dayRepeatFields" class="day-fields is-disabled">
+        <div class="field field-row field-row-compact">
+          <label for="repeatSun" class="switch-label">Repeat Sunday</label>
+          <label class="switch">
+            <input type="checkbox" id="repeatSun" data-day="0">
+            <span class="track"><span class="thumb"></span></span>
+          </label>
+        </div>
+        <div class="field field-row field-row-compact">
+          <label for="repeatMon" class="switch-label">Repeat Monday</label>
+          <label class="switch">
+            <input type="checkbox" id="repeatMon" data-day="1">
+            <span class="track"><span class="thumb"></span></span>
+          </label>
+        </div>
+        <div class="field field-row field-row-compact">
+          <label for="repeatTue" class="switch-label">Repeat Tuesday</label>
+          <label class="switch">
+            <input type="checkbox" id="repeatTue" data-day="2">
+            <span class="track"><span class="thumb"></span></span>
+          </label>
+        </div>
+        <div class="field field-row field-row-compact">
+          <label for="repeatWed" class="switch-label">Repeat Wednesday</label>
+          <label class="switch">
+            <input type="checkbox" id="repeatWed" data-day="3">
+            <span class="track"><span class="thumb"></span></span>
+          </label>
+        </div>
+        <div class="field field-row field-row-compact">
+          <label for="repeatThu" class="switch-label">Repeat Thursday</label>
+          <label class="switch">
+            <input type="checkbox" id="repeatThu" data-day="4">
+            <span class="track"><span class="thumb"></span></span>
+          </label>
+        </div>
+        <div class="field field-row field-row-compact">
+          <label for="repeatFri" class="switch-label">Repeat Friday</label>
+          <label class="switch">
+            <input type="checkbox" id="repeatFri" data-day="5">
+            <span class="track"><span class="thumb"></span></span>
+          </label>
+        </div>
+        <div class="field field-row field-row-compact">
+          <label for="repeatSat" class="switch-label">Repeat Saturday</label>
+          <label class="switch">
+            <input type="checkbox" id="repeatSat" data-day="6">
+            <span class="track"><span class="thumb"></span></span>
+          </label>
+        </div>
+      </div>
+
       <div class="dialog-actions">
+        <button class="btn btn-danger-ghost" type="button" id="deleteEditBtn" hidden>Delete</button>
         <button class="btn btn-secondary" type="button" id="cancelAddBtn">Cancel</button>
-        <button class="btn btn-primary" type="submit">Save alarm</button>
+        <button class="btn btn-primary" type="submit" id="saveAlarmBtn">Save alarm</button>
       </div>
     </form>
   </div>
@@ -87,6 +171,7 @@
         <button class="btn btn-primary" id="stopBtn" type="button">Stop</button>
       </div>
       <button class="btn btn-secondary" id="allowSoundBtn" type="button" hidden>Tap to allow sound</button>
+      <div class="ringing-hint">Clears automatically after 20 minutes if not stopped.</div>
     </div>
   </div>
 

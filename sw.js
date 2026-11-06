@@ -1,4 +1,4 @@
-const CACHE = 'alarms-v1';
+const CACHE = 'alarms-v4';
 const ASSETS = [
   './',
   './index.html',
